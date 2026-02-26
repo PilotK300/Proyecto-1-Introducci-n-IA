@@ -41,7 +41,21 @@ from matplotlib.animation import FuncAnimation
 from Laberinto import Laberinto
 from Grafo import Grafo
 from typing import Optional
+def _manhattan(nodo: tuple, meta: tuple) -> float:
+    """
+    Heurística de distancia Manhattan para A*.
 
+    Función suelta fuera de la clase para evitar dependencia de self.
+    Puede ser reemplazada por cualquier función (nodo, meta) -> float.
+
+    ¿Por qué Manhattan y no Euclidiana?
+    En el laberinto solo se puede mover en 4 direcciones (arriba, abajo,
+    izquierda, derecha), no en diagonal. La distancia Manhattan refleja
+    exactamente ese tipo de movimiento y nunca sobreestima el costo real.
+
+    Fórmula: |fila_actual - fila_meta| + |columna_actual - columna_meta|
+    """
+    return abs(nodo[0] - meta[0]) + abs(nodo[1] - meta[1])
 class Buscador:
 
     # Valores extra para la animación (además de los de Laberinto)
@@ -62,9 +76,7 @@ class Buscador:
         self.grafo      = grafo
         # Si no se pasa heurística, usa Manhattan por defecto
         # Línea __init__
-        # __init__ — línea 63
-        self.heuristica = heuristica if heuristica is not None else lambda nodo, meta: abs(nodo[0] - meta[0]) + abs(
-            nodo[1] - meta[1])
+        self.heuristica = heuristica if heuristica is not None else _manhattan
 
     # ------------------------------------------------------------------ #
     #  Utilidades compartidas                                             #
@@ -241,19 +253,6 @@ class Buscador:
         figura_cel.patch.set_facecolor("#0d0d1a")
         ejes_cel.set_facecolor("#0d0d1a")
         ejes_cel.axis("off")
-
-        # Generar confeti: puntos de colores aleatorios
-        colores_confeti = ["#f72585", "#ffd166", "#06d6a0", "#00b4d8",
-                           "#ff9f1c", "#e9c46a", "#a8dadc", "#ffffff"]
-        cantidad_confeti = 300
-        x_confeti = np.random.uniform(0, 1, cantidad_confeti)
-        y_confeti = np.random.uniform(0, 1, cantidad_confeti)
-        colores_aleatorios = np.random.choice(colores_confeti, cantidad_confeti)
-        tamanios_aleatorios = np.random.uniform(50, 300, cantidad_confeti)
-
-        ejes_cel.scatter(x_confeti, y_confeti, c=colores_aleatorios,
-                         s=tamanios_aleatorios, alpha=0.8, zorder=2)
-
         # Texto de celebración
         ejes_cel.text(0.5, 0.72, "¡Ruta encontrada!", color="white",
                       fontsize=22, fontweight="bold", ha="center", va="center",
@@ -469,7 +468,7 @@ class Buscador:
             if actual == meta:
                 break
 
-            for vecino in self.grafo.vecinos(actual):
+            for vecino, peso in self.grafo.vecinos(actual):
                 # Costo de moverse a un vecino = costo actual + 1
                 nuevo_costo = g_actual + 1
 

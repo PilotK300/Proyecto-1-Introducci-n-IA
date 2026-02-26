@@ -97,7 +97,7 @@ class Grafo:
                     # Si el vecino es camino, agregar la conexión
                     if self._es_camino(fila_vecina, columna_vecina):
                         nodo_vecino = (fila_vecina, columna_vecina)
-                        self.adyacencia[nodo_actual].append(nodo_vecino,1)
+                        self.adyacencia[nodo_actual].append((nodo_vecino,1))
 
     def vecinos(self, nodo: tuple[int, int]) -> list[tuple[int, int]]:
         """
