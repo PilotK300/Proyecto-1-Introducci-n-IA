@@ -259,7 +259,7 @@ class Laberinto:
             print(" ".join(str(int(celda)) for celda in fila))
 if __name__ == "__main__":
     # Cambiar 'tamanio' para ajustar el laberinto (debe ser impar)
-    laberinto = Laberinto(tamano=35)
+    laberinto = Laberinto(tamano=21)
 
     #print("=== Representación en consola ===")
     #print(laberinto)
