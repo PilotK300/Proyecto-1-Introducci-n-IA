@@ -8,11 +8,11 @@ Clase Buscador:
   - Al terminar resalta el camino encontrado
 
 Colores de la animación:
-  - Azul claro → celda explorada (visitada)
-  - Amarillo → celda en la frontera (por explorar)
-  - Verde → camino final encontrado
-  - Azul → inicio (S)
-  - Rosa → meta (G)
+  - Azul claro  → celda explorada (visitada)
+  - Amarillo    → celda en la frontera (por explorar)
+  - Verde       → camino final encontrado
+  - Azul        → inicio (S)
+  - Rosa        → meta (G)
 
 Uso:
     from Laberinto import Laberinto
@@ -20,15 +20,16 @@ Uso:
     from Buscador import Buscador
 
     laberinto = Laberinto(tamano=21)
-    grafo = Grafo(laberinto)
-    buscador = Buscador(laberinto, grafo)
+    grafo     = Grafo(laberinto)
+    buscador  = Buscador(laberinto, grafo)
 
-    buscador.bfs() # Breadth-First Search
-    buscador.dfs() # Depth-First Search
+    buscador.bfs()    # Breadth-First Search
+    buscador.dfs()    # Depth-First Search
     buscador.a_star() # A*
 """
 
 import heapq
+import time
 from collections import deque
 
 import matplotlib.pyplot as plt
@@ -39,7 +40,7 @@ from matplotlib.animation import FuncAnimation
 
 from Laberinto import Laberinto
 from Grafo import Grafo
-
+from typing import Optional
 
 class Buscador:
 
@@ -48,14 +49,22 @@ class Buscador:
     FRONTERA  = 5   # celda en cola/pila, pendiente de explorar
     CAMINO    = 6   # camino final encontrado
 
-    def __init__(self, laberinto: Laberinto, grafo: Grafo):
+    def __init__(self, laberinto: Laberinto, grafo: Grafo, heuristica=None):
         """
         Args:
-            laberinto : Objeto Laberinto ya generado.
-            grafo     : Objeto Grafo construido a partir del laberinto.
+            laberinto  : Objeto Laberinto ya generado.
+            grafo      : Objeto Grafo construido a partir del laberinto.
+            heuristica : Función heurística opcional para A*.
+                         Debe aceptar (nodo, meta) y devolver un número.
+                         Si no se pasa, usa distancia Manhattan por defecto.
         """
-        self.laberinto = laberinto
-        self.grafo     = grafo
+        self.laberinto  = laberinto
+        self.grafo      = grafo
+        # Si no se pasa heurística, usa Manhattan por defecto
+        # Línea __init__
+        # __init__ — línea 63
+        self.heuristica = heuristica if heuristica is not None else lambda nodo, meta: abs(nodo[0] - meta[0]) + abs(
+            nodo[1] - meta[1])
 
     # ------------------------------------------------------------------ #
     #  Utilidades compartidas                                             #
@@ -87,6 +96,7 @@ class Buscador:
         camino.reverse()
         return camino
 
+    @staticmethod
     def _heuristica(self, nodo: tuple, meta: tuple) -> float:
         """
         Heurística de distancia Manhattan para A*.
@@ -215,9 +225,59 @@ class Buscador:
         """
         return self.laberinto.matriz.copy().astype(int)
 
+    def _celebrar(self, titulo: str, tiempo_segundos: float, pasos_camino: int) -> None:
+        """
+        Muestra una ventana de celebración con confeti y el tiempo de búsqueda.
+
+        Args:
+            titulo          : Nombre del algoritmo.
+            tiempo_segundos : Tiempo que tardó el algoritmo en encontrar la ruta.
+            pasos_camino    : Longitud del camino encontrado.
+
+        El confeti se genera lanzando partículas de colores aleatorios
+        desde la parte superior de la figura con posiciones y tamaños aleatorios.
+        """
+        figura_cel, ejes_cel = plt.subplots(figsize=(7, 5))
+        figura_cel.patch.set_facecolor("#0d0d1a")
+        ejes_cel.set_facecolor("#0d0d1a")
+        ejes_cel.axis("off")
+
+        # Generar confeti: puntos de colores aleatorios
+        colores_confeti = ["#f72585", "#ffd166", "#06d6a0", "#00b4d8",
+                           "#ff9f1c", "#e9c46a", "#a8dadc", "#ffffff"]
+        cantidad_confeti = 300
+        x_confeti = np.random.uniform(0, 1, cantidad_confeti)
+        y_confeti = np.random.uniform(0, 1, cantidad_confeti)
+        colores_aleatorios = np.random.choice(colores_confeti, cantidad_confeti)
+        tamanios_aleatorios = np.random.uniform(50, 300, cantidad_confeti)
+
+        ejes_cel.scatter(x_confeti, y_confeti, c=colores_aleatorios,
+                         s=tamanios_aleatorios, alpha=0.8, zorder=2)
+
+        # Texto de celebración
+        ejes_cel.text(0.5, 0.72, "¡Ruta encontrada!", color="white",
+                      fontsize=22, fontweight="bold", ha="center", va="center",
+                      transform=ejes_cel.transAxes, zorder=3)
+
+        ejes_cel.text(0.5, 0.55, titulo, color="#ffd166",
+                      fontsize=15, ha="center", va="center",
+                      transform=ejes_cel.transAxes, zorder=3)
+
+        ejes_cel.text(0.5, 0.38,
+                      f"⏱ Tiempo de búsqueda: {tiempo_segundos:.4f} segundos",
+                      color="#a8dadc", fontsize=12, ha="center", va="center",
+                      transform=ejes_cel.transAxes, zorder=3)
+
+        ejes_cel.text(0.5, 0.25,
+                      f"📍 Longitud del camino: {pasos_camino} pasos",
+                      color="#06d6a0", fontsize=12, ha="center", va="center",
+                      transform=ejes_cel.transAxes, zorder=3)
+
+        plt.tight_layout()
+        plt.show()
+
     # ------------------------------------------------------------------ #
-    #  BFS — Breadth-First Search                                         #
-    # ------------------------------------------------------------------ #
+    #  BFS — Búsqueda por Amplitud
 
     def bfs(self) -> list:
         """
@@ -241,6 +301,8 @@ class Buscador:
         origen  = {inicio: None}            # diccionario de padres
         pasos   = []                        # frames para la animación
 
+        tiempo_inicio = time.time()         # iniciar cronómetro
+
         while cola:
             actual = cola.popleft()         # sacar el primero de la cola
 
@@ -263,13 +325,15 @@ class Buscador:
             if actual == meta:
                 break
 
-            for vecino in self.grafo.vecinos(actual):
+            for vecino, peso in self.grafo.vecinos(actual):
                 if vecino not in origen:
                     origen[vecino] = actual  # guardar de dónde vino
                     cola.append(vecino)
 
+        tiempo_total = time.time() - tiempo_inicio   # detener cronómetro
         camino = self._reconstruir_camino(origen, meta)
-        self._animar(pasos, camino, "BFS — Breadth-First Search")
+        self._animar(pasos, camino, "BFS — Búsqueda por Amplitud")
+        self._celebrar("BFS — Búsqueda por Amplitud", tiempo_total, len(camino))
         return camino
 
     # ------------------------------------------------------------------ #
@@ -304,6 +368,8 @@ class Buscador:
         pasos     = []
         encontrado = False                  # bandera para controlar el while
 
+        tiempo_inicio = time.time()         # iniciar cronómetro
+
         while pila and not encontrado:
             actual = pila.pop()             # sacar el último de la pila
 
@@ -330,14 +396,16 @@ class Buscador:
             if actual == meta:
                 encontrado = True           # activa la bandera y termina el while
             else:
-                for vecino in self.grafo.vecinos(actual):
+                for vecino, peso in self.grafo.vecinos(actual):
                     if vecino not in visitados:
                         origen[vecino] = actual
                         pila.append(vecino)
 
         # Siempre se llega aquí, sin importar cómo terminó el while
+        tiempo_total = time.time() - tiempo_inicio   # detener cronómetro
         camino = self._reconstruir_camino(origen, meta)
-        self._animar(pasos, camino, "DFS — Depth-First Search")
+        self._animar(pasos, camino, "DFS — Búsqueda por Profundidad")
+        self._celebrar("DFS — Búsqueda por Profundidad", tiempo_total, len(camino))
         return camino
 
     # ------------------------------------------------------------------ #
@@ -372,10 +440,12 @@ class Buscador:
 
         # heap: (f, g, nodo)
         # f = costo total estimado, g = costo real acumulado
-        heap   = [(0 + self._heuristica(inicio, meta), 0, inicio)]
+        heap   = [(0 + self.heuristica(inicio, meta), 0, inicio)]
         origen = {inicio: None}
         costo  = {inicio: 0}              # costo real acumulado por nodo
         pasos  = []
+
+        tiempo_inicio = time.time()       # iniciar cronómetro
 
         while heap:
             f_actual, g_actual, actual = heapq.heappop(heap)
@@ -406,12 +476,78 @@ class Buscador:
                 if vecino not in costo or nuevo_costo < costo[vecino]:
                     costo[vecino]  = nuevo_costo
                     origen[vecino] = actual
-                    f = nuevo_costo + self._heuristica(vecino, meta)
+                    f = nuevo_costo + self.heuristica(vecino, meta)
                     heapq.heappush(heap, (f, nuevo_costo, vecino))
 
+        tiempo_total = time.time() - tiempo_inicio   # detener cronómetro
         camino = self._reconstruir_camino(origen, meta)
-        self._animar(pasos, camino, "A* Search")
+        self._animar(pasos, camino, "A* — Búsqueda Informada")
+        self._celebrar("A* — Búsqueda Informada", tiempo_total, len(camino))
         return camino
+
+
+# ------------------------------------------------------------------ #
+#  Función principal con parámetros explícitos                        #
+# ------------------------------------------------------------------ #
+
+def main(n: int, coordenada_salida: Optional[tuple], coordenada_meta: Optional[tuple], heuristica=None):
+    """
+    Función principal del proyecto.
+
+    Recibe los insumos del problema, construye el laberinto y el grafo,
+    y ejecuta los tres algoritmos de búsqueda.
+
+    Args:
+        n                 : Dimensión del laberinto (tamaño N x N, debe ser impar).
+        coordenada_salida : Tupla (fila, columna) del punto de inicio.
+                            Si se pasa None, usa la esquina superior izquierda (1, 1).
+        coordenada_meta   : Tupla (fila, columna) del punto de llegada.
+                            Si se pasa None, usa el centro de la matriz.
+        heuristica        : Función heurística opcional para A*.
+                            Si se pasa None, usa distancia Manhattan por defecto.
+
+    Ejemplo de uso:
+        main(n=21, coordenada_salida=(1,1), coordenada_meta=(10,10))
+        main(n=31, coordenada_salida=None, coordenada_meta=None)
+    """
+    # 1. Construir el laberinto con las dimensiones indicadas
+    laberinto = Laberinto(tamano=n)
+
+    # 2. Sobreescribir inicio y meta si se pasaron coordenadas explícitas
+    if coordenada_salida is not None:
+        laberinto.inicio = coordenada_salida
+        laberinto.matriz[coordenada_salida[0]][coordenada_salida[1]] = laberinto.INICIO
+
+    if coordenada_meta is not None:
+        laberinto.meta = coordenada_meta
+        laberinto.matriz[coordenada_meta[0]][coordenada_meta[1]] = laberinto.META
+
+    # 3. Transformar la matriz en grafo
+    grafo = Grafo(laberinto)
+
+    # 4. Crear el buscador con la heurística indicada (o Manhattan por defecto)
+    buscador = Buscador(laberinto, grafo, heuristica=heuristica)
+
+    print(f"Laberinto {n}x{n} | Salida: {laberinto.inicio} | Meta: {laberinto.meta}")
+    print("-" * 50)
+
+    # 5. Ejecutar los tres algoritmos e imprimir rutas
+    print("Corriendo BFS — Búsqueda por Amplitud...")
+    camino_bfs = buscador.bfs()
+    print(f"BFS — ruta calculada: {camino_bfs}")
+    print(f"BFS — pasos: {len(camino_bfs)}")
+    print("-" * 50)
+
+    print("Corriendo DFS — Búsqueda por Profundidad...")
+    camino_dfs = buscador.dfs()
+    print(f"DFS — ruta calculada: {camino_dfs}")
+    print(f"DFS — pasos: {len(camino_dfs)}")
+    print("-" * 50)
+
+    print("Corriendo A* — Búsqueda Informada...")
+    camino_astar = buscador.a_star()
+    print(f"A*  — ruta calculada: {camino_astar}")
+    print(f"A*  — pasos: {len(camino_astar)}")
 
 
 # ------------------------------------------------------------------ #
@@ -419,18 +555,8 @@ class Buscador:
 # ------------------------------------------------------------------ #
 
 if __name__ == "__main__":
-    laberinto = Laberinto(tamano=21)
-    grafo     = Grafo(laberinto)
-    buscador  = Buscador(laberinto, grafo)
-
-    print("Corriendo BFS...")
-    camino_bfs = buscador.bfs()
-    print(f"BFS — camino encontrado: {len(camino_bfs)} pasos")
-
-    print("Corriendo DFS...")
-    camino_dfs = buscador.dfs()
-    print(f"DFS — camino encontrado: {len(camino_dfs)} pasos")
-
-    print("Corriendo A*...")
-    camino_astar = buscador.a_star()
-    print(f"A*  — camino encontrado: {len(camino_astar)} pasos")
+    main(
+        n=21,
+        coordenada_salida=None,   # None = usa esquina superior izquierda (1,1)
+        coordenada_meta=None,     # None = usa el centro de la matriz
+    )
