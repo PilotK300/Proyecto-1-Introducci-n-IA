@@ -60,12 +60,45 @@ class Buscador:
         """
         self.laberinto  = laberinto
         self.grafo      = grafo
+         self.macro_adj = {} #
         # Si no se pasa heurística, usa Manhattan por defecto
         # Línea __init__
         # __init__ — línea 63
         self.heuristica = heuristica if heuristica is not None else lambda nodo, meta: abs(nodo[0] - meta[0]) + abs(
             nodo[1] - meta[1])
 
+      # =================================================================
+    # MODIFICACIÓN: LÓGICA DE ABSTRACCIÓN (MACRO-GRAFO)
+    # =================================================================
+      
+        def _es_nodo_decision(self, pos):
+        if pos == self.laberinto.inicio or pos == self.laberinto.meta:
+            return True
+        grado = len(self.grafo.vecinos(pos))
+        return grado != 2 # Nodos que no son pasillos simples [cite: 21]
+
+      def _explorar_corredor(self, origen, primer_paso):
+        camino = [origen, primer_paso]
+        anterior, actual = origen, primer_paso
+        while not self._es_nodo_decision(actual):
+            vecinos = self.grafo.vecinos(actual)
+            siguiente = [n for n in vecinos if n != anterior][0]
+            camino.append(siguiente)
+            anterior, actual = actual, siguiente
+        return camino, actual
+
+       def construir_macro_grafo(self):
+        self.macro_adj = {}
+        nodos_reales = [n for n in self.grafo.nodos if self._es_nodo_decision(n)]
+        for nodo in nodos_reales:
+            self.macro_adj[nodo] = []
+            for v_inmediato in self.grafo.vecinos(nodo):
+                pasos, destino = self._explorar_corredor(nodo, v_inmediato)
+                self.macro_adj[nodo].append({
+                    "destino": destino,
+                    "peso": len(pasos) - 1, # El peso es la longitud del corredor [cite: 29]
+                    "camino_detallado": pasos
+                })
     # ------------------------------------------------------------------ #
     #  Utilidades compartidas                                             #
     # ------------------------------------------------------------------ #
@@ -485,6 +518,53 @@ class Buscador:
         self._celebrar("A* — Búsqueda Informada", tiempo_total, len(camino))
         return camino
 
+    # =================================================================
+    # ALGORITMO A* OPTIMIZADO (MACRO-ASTAR)
+    # =================================================================
+
+    def astar_macro(self):
+        self.construir_macro_grafo()
+        inicio, meta = self.laberinto.inicio, self.laberinto.meta
+        heap = [(0 + self._heuristica(inicio, meta), 0, inicio)]
+        origen_macro = {inicio: None}
+        costo_g = {inicio: 0}
+        nodos_expandidos = 0 
+
+        while heap:
+            f, g_actual, actual = heapq.heappop(heap)
+            nodos_expandidos += 1
+            if actual == meta: break
+
+            for arista in self.macro_adj.get(actual, []):
+                vecino, peso = arista["destino"], arista["peso"]
+                nuevo_g = g_actual + peso # Suma de macro-aristas [cite: 33]
+                if vecino not in costo_g or nuevo_g < costo_g[vecino]:
+                    costo_g[vecino] = nuevo_g
+                    origen_macro[vecino] = (actual, arista["camino_detallado"])
+                    heapq.heappush(heap, (nuevo_g + self._heuristica(vecino, meta), nuevo_g, vecino))
+
+        return self._reconstruir_ruta_completa(origen_macro, meta), nodos_expandidos
+
+      # =================================================================
+      # RECONSTRUCCIÓN DE RUTA COMPLETA
+      # =================================================================
+      
+        def _reconstruir_ruta_completa(self, origen_macro, meta):
+        """
+        Reconstruye la ruta paso a paso a partir de los macro-nodos[cite: 34].
+        """
+        camino_final = []
+        actual = meta
+        while actual is not None and actual != self.laberinto.inicio:
+            datos = origen_macro.get(actual)
+            if datos is None: break
+            padre, celdas_corredor = datos
+            # Se añaden las celdas intermedias del corredor [cite: 34]
+            camino_final.extend(reversed(celdas_corredor[1:]))
+            actual = padre
+        camino_final.append(self.laberinto.inicio)
+        camino_final.reverse()
+        return camino_final
 
 # ------------------------------------------------------------------ #
 #  Función principal con parámetros explícitos                        #
