@@ -23,14 +23,15 @@ Uso:
     grafo     = Grafo(laberinto)
     buscador  = Buscador(laberinto, grafo)
 
-    buscador.bfs()    # Breadth-First Search
-    buscador.dfs()    # Depth-First Search
+    buscador.bfs()    # Busqueda por Amplitud
+    buscador.dfs()    # Busqueda por Profundidad
     buscador.a_star() # A*
 """
 
 import heapq
 import time
 from collections import deque
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -40,11 +41,28 @@ from matplotlib.animation import FuncAnimation
 
 from Laberinto import Laberinto
 from Grafo import Grafo
-from typing import Optional
+
+
+def _manhattan(nodo: tuple, meta: tuple) -> float:
+    """
+    Heuristica de distancia Manhattan para A*.
+
+    Funcion suelta fuera de la clase para evitar dependencia de self.
+    Puede ser reemplazada por cualquier funcion (nodo, meta) -> float.
+
+    Por que Manhattan y no Euclidiana?
+    En el laberinto solo se puede mover en 4 direcciones (arriba, abajo,
+    izquierda, derecha), no en diagonal. La distancia Manhattan refleja
+    exactamente ese tipo de movimiento y nunca sobreestima el costo real.
+
+    Formula: |fila_actual - fila_meta| + |columna_actual - columna_meta|
+    """
+    return abs(nodo[0] - meta[0]) + abs(nodo[1] - meta[1])
+
 
 class Buscador:
 
-    # Valores extra para la animación (además de los de Laberinto)
+    # Valores extra para la animacion (ademas de los de Laberinto)
     EXPLORADO = 4   # celda ya visitada por el algoritmo
     FRONTERA  = 5   # celda en cola/pila, pendiente de explorar
     CAMINO    = 6   # camino final encontrado
@@ -54,51 +72,101 @@ class Buscador:
         Args:
             laberinto  : Objeto Laberinto ya generado.
             grafo      : Objeto Grafo construido a partir del laberinto.
-            heuristica : Función heurística opcional para A*.
-                         Debe aceptar (nodo, meta) y devolver un número.
+            heuristica : Funcion heuristica opcional para A*.
+                         Debe aceptar (nodo, meta) y devolver un numero.
                          Si no se pasa, usa distancia Manhattan por defecto.
         """
         self.laberinto  = laberinto
         self.grafo      = grafo
-         self.macro_adj = {} #
-        # Si no se pasa heurística, usa Manhattan por defecto
-        # Línea __init__
-        # __init__ — línea 63
-        self.heuristica = heuristica if heuristica is not None else lambda nodo, meta: abs(nodo[0] - meta[0]) + abs(
-            nodo[1] - meta[1])
+        self.macro_adj  = {}
+        # Si no se pasa heuristica usa Manhattan, de lo contrario la funcion recibida
+        self.heuristica = heuristica if heuristica is not None else _manhattan
 
-      # =================================================================
-    # MODIFICACIÓN: LÓGICA DE ABSTRACCIÓN (MACRO-GRAFO)
-    # =================================================================
-      
-        def _es_nodo_decision(self, pos):
+    # ------------------------------------------------------------------ #
+    #  LOGICA DE ABSTRACCION (MACRO-GRAFO)                                #
+    # ------------------------------------------------------------------ #
+
+    def es_nodo_decision(self, pos: tuple[int,int]) -> bool:
+        """
+        Determina si una posicion es un nodo de decision.
+
+        Un nodo de decision es aquel donde el agente debe elegir
+        una direccion: inicio, meta, intersecciones o callejones sin salida.
+        Los pasillos rectos (grado 2) no son nodos de decision.
+        """
         if pos == self.laberinto.inicio or pos == self.laberinto.meta:
             return True
         grado = len(self.grafo.vecinos(pos))
-        return grado != 2 # Nodos que no son pasillos simples [cite: 21]
+        return grado != 2
 
-      def _explorar_corredor(self, origen, primer_paso):
+    def _explorar_corredor(self, origen: tuple[int,int], primer_paso: tuple[int,int]) -> tuple:
+        """
+        Recorre un corredor recto desde origen hasta el siguiente nodo de decision.
+
+        Args:
+            origen      : Nodo de decision desde donde empieza el corredor.
+            primer_paso : Primera celda del corredor.
+
+        Returns:
+            Tupla (camino, destino) donde camino es la lista de celdas
+            recorridas y destino es el nodo de decision al final del corredor.
+        """
         camino = [origen, primer_paso]
         anterior, actual = origen, primer_paso
-        while not self._es_nodo_decision(actual):
+        while not self.es_nodo_decision(actual):
             vecinos = self.grafo.vecinos(actual)
-            siguiente = [n for n in vecinos if n != anterior][0]
+            # Desempacar (nodo, peso) y filtrar el nodo anterior
+            siguiente = [n for n, peso in vecinos if n != anterior][0]
             camino.append(siguiente)
             anterior, actual = actual, siguiente
         return camino, actual
 
-       def construir_macro_grafo(self):
+    def construir_macro_grafo(self) -> None:
+        """
+        Construye el macro-grafo conectando solo los nodos de decision.
+
+        En lugar de trabajar con todas las celdas, el macro-grafo
+        agrupa los corredores rectos en una sola arista con peso igual
+        a la longitud del corredor. Esto reduce el espacio de busqueda.
+        """
         self.macro_adj = {}
-        nodos_reales = [n for n in self.grafo.nodos if self._es_nodo_decision(n)]
+        # Solo los nodos de decision son nodos del macro-grafo
+        nodos_reales = [n for n in self.grafo.adyacencia if self.es_nodo_decision(n)]
         for nodo in nodos_reales:
             self.macro_adj[nodo] = []
-            for v_inmediato in self.grafo.vecinos(nodo):
+            for v_inmediato, peso in self.grafo.vecinos(nodo):
                 pasos, destino = self._explorar_corredor(nodo, v_inmediato)
                 self.macro_adj[nodo].append({
                     "destino": destino,
-                    "peso": len(pasos) - 1, # El peso es la longitud del corredor [cite: 29]
+                    "peso": len(pasos) - 1,     # peso = longitud del corredor
                     "camino_detallado": pasos
                 })
+
+    def _reconstruir_ruta_completa(self, origen_macro: dict, meta: tuple) -> list:
+        """
+        Reconstruye la ruta completa paso a paso a partir de los macro-nodos.
+
+        Args:
+            origen_macro : Diccionario {nodo: (padre, celdas_corredor)}.
+            meta         : Nodo de llegada.
+
+        Returns:
+            Lista completa de celdas desde inicio hasta meta.
+        """
+        camino_final = []
+        actual = meta
+        while actual is not None and actual != self.laberinto.inicio:
+            datos = origen_macro.get(actual)
+            if datos is None:
+                break
+            padre, celdas_corredor = datos
+            # Agregar las celdas intermedias del corredor en orden inverso
+            camino_final.extend(reversed(celdas_corredor[1:]))
+            actual = padre
+        camino_final.append(self.laberinto.inicio)
+        camino_final.reverse()
+        return camino_final
+
     # ------------------------------------------------------------------ #
     #  Utilidades compartidas                                             #
     # ------------------------------------------------------------------ #
@@ -109,61 +177,47 @@ class Buscador:
         el diccionario de padres (origen).
 
         Args:
-            origen     : Diccionario {nodo: nodo_padre} generado durante la búsqueda.
+            origen     : Diccionario {nodo: nodo_padre} generado durante la busqueda.
             nodo_final : Nodo de llegada (la meta).
 
         Returns:
             Lista de nodos desde el inicio hasta la meta.
 
-        ¿Cómo funciona?
-        Durante la búsqueda, cada vez que se visita un nodo se guarda
-        de dónde vino (su padre). Al llegar a la meta, se sigue la
-        cadena de padres hacia atrás hasta llegar al inicio, y luego
+        Como funciona?
+        Durante la busqueda, cada vez que se visita un nodo se guarda
+        de donde vino (su padre). Al llegar a la meta, se sigue la
+        cadena de padres hacia atras hasta llegar al inicio, y luego
         se invierte la lista para tenerla en orden correcto.
         """
-        camino  = []
-        actual  = nodo_final
+        camino = []
+        actual = nodo_final
         while actual is not None:
             camino.append(actual)
             actual = origen.get(actual)
         camino.reverse()
         return camino
 
-    @staticmethod
-    def _heuristica(self, nodo: tuple, meta: tuple) -> float:
-        """
-        Heurística de distancia Manhattan para A*.
-
-        ¿Por qué Manhattan y no Euclidiana?
-        En el laberinto solo se puede mover en 4 direcciones (arriba, abajo,
-        izquierda, derecha), no en diagonal. La distancia Manhattan refleja
-        exactamente ese tipo de movimiento.
-
-        Fórmula: |fila_actual - fila_meta| + |columna_actual - columna_meta|
-        """
-        return abs(nodo[0] - meta[0]) + abs(nodo[1] - meta[1])
-
     # ------------------------------------------------------------------ #
-    #  Animación                                                          #
+    #  Animacion                                                          #
     # ------------------------------------------------------------------ #
 
     def _animar(self, pasos: list, camino: list, titulo: str) -> None:
         """
-        Muestra la animación de la búsqueda paso a paso.
+        Muestra la animacion de la busqueda paso a paso.
 
         Args:
-            pasos  : Lista de matrices numpy, una por cada paso de la búsqueda.
+            pasos  : Lista de matrices numpy, una por cada paso de la busqueda.
             camino : Lista de nodos que forman el camino final.
-            titulo : Nombre del algoritmo para mostrar en el título.
+            titulo : Nombre del algoritmo para mostrar en el titulo.
 
-        Paleta de colores (índice → color):
-            0 → CAMINO    gris claro  (celda transitable)
-            1 → PARED     azul oscuro (pared)
-            2 → INICIO    azul        (S)
-            3 → META      rosa        (G)
-            4 → EXPLORADO celda azul claro (ya visitada)
-            5 → FRONTERA  amarillo    (en cola/pila)
-            6 → CAMINO    verde       (solución final)
+        Paleta de colores (indice -> color):
+            0 -> CAMINO    gris claro  (celda transitable)
+            1 -> PARED     azul oscuro (pared)
+            2 -> INICIO    azul        (S)
+            3 -> META      rosa        (G)
+            4 -> EXPLORADO celda azul claro (ya visitada)
+            5 -> FRONTERA  amarillo    (en cola/pila)
+            6 -> CAMINO    verde       (solucion final)
         """
         colores = [
             "#e8e8e0",  # 0 camino
@@ -217,15 +271,15 @@ class Buscador:
 
         def actualizar(frame):
             """
-            Función que matplotlib llama en cada frame de la animación.
+            Funcion que matplotlib llama en cada frame de la animacion.
             Actualiza la imagen con el estado del laberinto en ese paso.
-            Si es el último frame, muestra el camino final.
+            Si es el ultimo frame, muestra el camino final.
             """
             if frame < total_pasos:
                 imagen.set_data(pasos[frame])
                 titulo_texto.set_text(f"{titulo} — paso {frame + 1}/{total_pasos}")
             else:
-                # Último frame: pintar el camino final
+                # Ultimo frame: pintar el camino final
                 matriz_final = pasos[-1].copy()
                 for nodo in camino:
                     fila, columna = nodo
@@ -238,7 +292,8 @@ class Buscador:
                 titulo_texto.set_text(f"{titulo} — camino encontrado ({pasos_camino} pasos)")
             return [imagen]
 
-        # interval: milisegundos entre frames (menor = más rápido)
+        # Se guarda en variable para evitar que el recolector de basura
+        # de Python elimine la animacion antes de que termine de mostrarse
         animacion = FuncAnimation(
             figura,
             actualizar,
@@ -254,72 +309,71 @@ class Buscador:
     def _matriz_base(self) -> np.ndarray:
         """
         Devuelve una copia limpia de la matriz del laberinto
-        para usarla como punto de partida de cada frame de animación.
+        para usarla como punto de partida de cada frame de animacion.
         """
         return self.laberinto.matriz.copy().astype(int)
 
-    def _celebrar(self, titulo: str, tiempo_segundos: float, pasos_camino: int) -> None:
+    def _celebrar(self, titulo: str, tiempo_segundos: float, pasos_camino: int, costo=None) -> None:
         """
-        Muestra una ventana de celebración con confeti y el tiempo de búsqueda.
+        Muestra una ventana de celebracion con confeti y el tiempo de busqueda.
 
         Args:
             titulo          : Nombre del algoritmo.
-            tiempo_segundos : Tiempo que tardó el algoritmo en encontrar la ruta.
+            tiempo_segundos : Tiempo que tardo el algoritmo en encontrar la ruta.
             pasos_camino    : Longitud del camino encontrado.
-
-        El confeti se genera lanzando partículas de colores aleatorios
-        desde la parte superior de la figura con posiciones y tamaños aleatorios.
+            costo           : Costo total de la ruta (solo A*, None para BFS y DFS).
         """
         figura_cel, ejes_cel = plt.subplots(figsize=(7, 5))
         figura_cel.patch.set_facecolor("#0d0d1a")
         ejes_cel.set_facecolor("#0d0d1a")
         ejes_cel.axis("off")
+        # Posiciones verticales de cada texto
+        pos_titulo    = 0.75
+        pos_algoritmo = 0.58
+        pos_tiempo    = 0.42
+        pos_pasos     = 0.28
+        pos_costo     = 0.13
 
-        # Generar confeti: puntos de colores aleatorios
-        colores_confeti = ["#f72585", "#ffd166", "#06d6a0", "#00b4d8",
-                           "#ff9f1c", "#e9c46a", "#a8dadc", "#ffffff"]
-        cantidad_confeti = 300
-        x_confeti = np.random.uniform(0, 1, cantidad_confeti)
-        y_confeti = np.random.uniform(0, 1, cantidad_confeti)
-        colores_aleatorios = np.random.choice(colores_confeti, cantidad_confeti)
-        tamanios_aleatorios = np.random.uniform(50, 300, cantidad_confeti)
-
-        ejes_cel.scatter(x_confeti, y_confeti, c=colores_aleatorios,
-                         s=tamanios_aleatorios, alpha=0.8, zorder=2)
-
-        # Texto de celebración
-        ejes_cel.text(0.5, 0.72, "¡Ruta encontrada!", color="white",
+        ejes_cel.text(0.5, pos_titulo, "Ruta encontrada!", color="white",
                       fontsize=22, fontweight="bold", ha="center", va="center",
                       transform=ejes_cel.transAxes, zorder=3)
 
-        ejes_cel.text(0.5, 0.55, titulo, color="#ffd166",
+        ejes_cel.text(0.5, pos_algoritmo, titulo, color="#ffd166",
                       fontsize=15, ha="center", va="center",
                       transform=ejes_cel.transAxes, zorder=3)
 
-        ejes_cel.text(0.5, 0.38,
-                      f"⏱ Tiempo de búsqueda: {tiempo_segundos:.4f} segundos",
+        ejes_cel.text(0.5, pos_tiempo,
+                      f"Tiempo de busqueda: {tiempo_segundos:.4f} segundos",
                       color="#a8dadc", fontsize=12, ha="center", va="center",
                       transform=ejes_cel.transAxes, zorder=3)
 
-        ejes_cel.text(0.5, 0.25,
-                      f"📍 Longitud del camino: {pasos_camino} pasos",
+        ejes_cel.text(0.5, pos_pasos,
+                      f"Longitud del camino: {pasos_camino} pasos",
                       color="#06d6a0", fontsize=12, ha="center", va="center",
                       transform=ejes_cel.transAxes, zorder=3)
+
+        # Solo A* muestra el costo
+        if costo is not None:
+            ejes_cel.text(0.5, pos_costo,
+                          f"Costo total de la ruta: {costo}",
+                          color="#f72585", fontsize=12, ha="center", va="center",
+                          transform=ejes_cel.transAxes, zorder=3)
 
         plt.tight_layout()
         plt.show()
 
     # ------------------------------------------------------------------ #
-    #  BFS — Búsqueda por Amplitud
+    #  BFS — Busqueda por Amplitud                                        #
+    # ------------------------------------------------------------------ #
 
     def bfs(self) -> list:
         """
-        Búsqueda por amplitud (BFS).
+        Busqueda por amplitud (BFS).
 
-        ¿Cómo funciona?
+        Como funciona?
         Usa una cola (FIFO). Explora todos los vecinos del nodo actual
         antes de avanzar al siguiente nivel. Esto garantiza que el primer
-        camino encontrado sea el más corto en número de pasos.
+        camino encontrado sea el mas corto en numero de pasos.
 
         Estructura usada: deque (cola doble, eficiente para agregar y quitar
         por ambos extremos).
@@ -328,18 +382,18 @@ class Buscador:
             Tiempo  : O(V + E) donde V = nodos, E = aristas
             Espacio : O(V)
         """
-        inicio  = self.laberinto.inicio
-        meta    = self.laberinto.meta
-        cola    = deque([inicio])           # cola FIFO
-        origen  = {inicio: None}            # diccionario de padres
-        pasos   = []                        # frames para la animación
+        inicio = self.laberinto.inicio
+        meta   = self.laberinto.meta
+        cola   = deque([inicio])        # cola FIFO
+        origen = {inicio: None}         # diccionario de padres
+        pasos  = []                     # frames para la animacion
 
-        tiempo_inicio = time.time()         # iniciar cronómetro
+        tiempo_inicio = time.time()     # iniciar cronometro
 
         while cola:
-            actual = cola.popleft()         # sacar el primero de la cola
+            actual = cola.popleft()     # sacar el primero de la cola
 
-            # Capturar el estado actual de la matriz para animación
+            # Capturar el estado actual de la matriz para animacion
             matriz_paso = self._matriz_base()
             for nodo in origen:
                 fila, columna = nodo
@@ -360,57 +414,57 @@ class Buscador:
 
             for vecino, peso in self.grafo.vecinos(actual):
                 if vecino not in origen:
-                    origen[vecino] = actual  # guardar de dónde vino
+                    origen[vecino] = actual     # guardar de donde vino
                     cola.append(vecino)
 
-        tiempo_total = time.time() - tiempo_inicio   # detener cronómetro
+        tiempo_total = time.time() - tiempo_inicio      # detener cronometro
         camino = self._reconstruir_camino(origen, meta)
-        self._animar(pasos, camino, "BFS — Búsqueda por Amplitud")
-        self._celebrar("BFS — Búsqueda por Amplitud", tiempo_total, len(camino))
+        self._animar(pasos, camino, "BFS — Busqueda por Amplitud")
+        self._celebrar("BFS — Busqueda por Amplitud", tiempo_total, len(camino))
         return camino
 
     # ------------------------------------------------------------------ #
-    #  DFS — Depth-First Search                                           #
+    #  DFS — Busqueda por Profundidad                                     #
     # ------------------------------------------------------------------ #
 
     def dfs(self) -> list:
         """
-        Búsqueda por profundidad (DFS).
+        Busqueda por profundidad (DFS).
 
-        ¿Cómo funciona?
-        Usa una pila (LIFO). Siempre explora el camino más profundo
-        antes de retroceder. No garantiza el camino más corto, pero
+        Como funciona?
+        Usa una pila (LIFO). Siempre explora el camino mas profundo
+        antes de retroceder. No garantiza el camino mas corto, pero
         usa menos memoria que BFS en muchos casos.
 
         Estructura usada: lista de Python usada como pila (append/pop).
 
-        ¿Por qué se usa una bandera encontrado en lugar de return dentro del while?
-        Usar return dentro del while cortaría el flujo antes de llegar a la
-        animación y al retorno del camino. Con la bandera, el while termina
-        naturalmente y el resto del código siempre se ejecuta.
+        Por que se usa una bandera encontrado en lugar de return dentro del while?
+        Usar return dentro del while cortaria el flujo antes de llegar a la
+        animacion y al retorno del camino. Con la bandera, el while termina
+        naturalmente y el resto del codigo siempre se ejecuta.
 
         Complejidad:
             Tiempo  : O(V + E)
             Espacio : O(V)
         """
-        inicio    = self.laberinto.inicio
-        meta      = self.laberinto.meta
-        pila      = [inicio]                # pila LIFO
-        origen    = {inicio: None}
-        visitados = set()
-        pasos     = []
+        inicio     = self.laberinto.inicio
+        meta       = self.laberinto.meta
+        pila       = [inicio]               # pila LIFO
+        origen     = {inicio: None}
+        visitados  = set()
+        pasos      = []
         encontrado = False                  # bandera para controlar el while
 
-        tiempo_inicio = time.time()         # iniciar cronómetro
+        tiempo_inicio = time.time()         # iniciar cronometro
 
         while pila and not encontrado:
-            actual = pila.pop()             # sacar el último de la pila
+            actual = pila.pop()             # sacar el ultimo de la pila
 
             if actual in visitados:
                 continue
             visitados.add(actual)
 
-            # Capturar estado para animación
+            # Capturar estado para animacion
             matriz_paso = self._matriz_base()
             for nodo in visitados:
                 fila, columna = nodo
@@ -434,34 +488,34 @@ class Buscador:
                         origen[vecino] = actual
                         pila.append(vecino)
 
-        # Siempre se llega aquí, sin importar cómo terminó el while
-        tiempo_total = time.time() - tiempo_inicio   # detener cronómetro
+        # Siempre se llega aqui, sin importar como termino el while
+        tiempo_total = time.time() - tiempo_inicio      # detener cronometro
         camino = self._reconstruir_camino(origen, meta)
-        self._animar(pasos, camino, "DFS — Búsqueda por Profundidad")
-        self._celebrar("DFS — Búsqueda por Profundidad", tiempo_total, len(camino))
+        self._animar(pasos, camino, "DFS — Busqueda por Profundidad")
+        self._celebrar("DFS — Busqueda por Profundidad", tiempo_total, len(camino))
         return camino
 
     # ------------------------------------------------------------------ #
-    #  A* Search                                                          #
+    #  A* — Busqueda Informada                                            #
     # ------------------------------------------------------------------ #
 
     def a_star(self) -> list:
         """
-        Búsqueda A* (A estrella).
+        Busqueda A* (A estrella).
 
-        ¿Cómo funciona?
-        Combina el costo real del camino recorrido (g) con una estimación
-        del costo restante hasta la meta (h, heurística). La función de
-        evaluación es:
+        Como funciona?
+        Combina el costo real del camino recorrido (g) con una estimacion
+        del costo restante hasta la meta (h, heuristica). La funcion de
+        evaluacion es:
             f(n) = g(n) + h(n)
 
-        Siempre expande el nodo con menor f(n), lo que lo hace más
-        eficiente que BFS y DFS cuando la heurística es buena.
+        Siempre expande el nodo con menor f(n), lo que lo hace mas
+        eficiente que BFS y DFS cuando la heuristica es buena.
 
-        Heurística usada: distancia Manhattan, admisible para laberintos
+        Heuristica usada: distancia Manhattan, admisible para laberintos
         porque nunca sobreestima el costo real (solo movimientos en 4 direcciones).
 
-        Estructura usada: montículo mínimo (heap) para obtener siempre
+        Estructura usada: monticulo minimo (heap) para obtener siempre
         el nodo con menor f(n) en O(log n).
 
         Complejidad:
@@ -475,15 +529,15 @@ class Buscador:
         # f = costo total estimado, g = costo real acumulado
         heap   = [(0 + self.heuristica(inicio, meta), 0, inicio)]
         origen = {inicio: None}
-        costo  = {inicio: 0}              # costo real acumulado por nodo
+        costo  = {inicio: 0}            # costo real acumulado por nodo
         pasos  = []
 
-        tiempo_inicio = time.time()       # iniciar cronómetro
+        tiempo_inicio = time.time()     # iniciar cronometro
 
         while heap:
             f_actual, g_actual, actual = heapq.heappop(heap)
 
-            # Capturar estado para animación
+            # Capturar estado para animacion
             matriz_paso = self._matriz_base()
             for nodo in origen:
                 fila, columna = nodo
@@ -502,9 +556,9 @@ class Buscador:
             if actual == meta:
                 break
 
-            for vecino in self.grafo.vecinos(actual):
-                # Costo de moverse a un vecino = costo actual + 1
-                nuevo_costo = g_actual + 1
+            for vecino, peso in self.grafo.vecinos(actual):
+                # Costo de moverse a un vecino = costo actual + peso
+                nuevo_costo = g_actual + peso
 
                 if vecino not in costo or nuevo_costo < costo[vecino]:
                     costo[vecino]  = nuevo_costo
@@ -512,78 +566,74 @@ class Buscador:
                     f = nuevo_costo + self.heuristica(vecino, meta)
                     heapq.heappush(heap, (f, nuevo_costo, vecino))
 
-        tiempo_total = time.time() - tiempo_inicio   # detener cronómetro
+        tiempo_total = time.time() - tiempo_inicio      # detener cronometro
+        costo_final  = costo.get(meta, 0)               # costo real hasta la meta
         camino = self._reconstruir_camino(origen, meta)
-        self._animar(pasos, camino, "A* — Búsqueda Informada")
-        self._celebrar("A* — Búsqueda Informada", tiempo_total, len(camino))
+        self._animar(pasos, camino, "A* — Busqueda Informada")
+        self._celebrar("A* — Busqueda Informada", tiempo_total, len(camino), costo_final)
         return camino
 
-    # =================================================================
-    # ALGORITMO A* OPTIMIZADO (MACRO-ASTAR)
-    # =================================================================
+    # ------------------------------------------------------------------ #
+    #  A* OPTIMIZADO (MACRO-GRAFO)                                        #
+    # ------------------------------------------------------------------ #
 
-    def astar_macro(self):
+    def astar_macro(self) -> tuple[list,int]:
+        """
+        A* optimizado usando el macro-grafo.
+
+        En lugar de explorar celda a celda, opera sobre nodos de decision
+        conectados por aristas con peso igual a la longitud del corredor.
+        Esto reduce significativamente el numero de nodos expandidos.
+
+        Returns:
+            Tupla (camino_completo, nodos_expandidos).
+        """
         self.construir_macro_grafo()
         inicio, meta = self.laberinto.inicio, self.laberinto.meta
-        heap = [(0 + self._heuristica(inicio, meta), 0, inicio)]
-        origen_macro = {inicio: None}
-        costo_g = {inicio: 0}
-        nodos_expandidos = 0 
+        heap             = [(0 + self.heuristica(inicio, meta), 0, inicio)]
+        origen_macro     = {inicio: None}
+        costo_g          = {inicio: 0}
+        nodos_expandidos = 0
 
         while heap:
             f, g_actual, actual = heapq.heappop(heap)
             nodos_expandidos += 1
-            if actual == meta: break
+
+            if actual == meta:
+                break
 
             for arista in self.macro_adj.get(actual, []):
-                vecino, peso = arista["destino"], arista["peso"]
-                nuevo_g = g_actual + peso # Suma de macro-aristas [cite: 33]
+                vecino  = arista["destino"]
+                peso    = arista["peso"]
+                nuevo_g = g_actual + peso
                 if vecino not in costo_g or nuevo_g < costo_g[vecino]:
-                    costo_g[vecino] = nuevo_g
+                    costo_g[vecino]      = nuevo_g
                     origen_macro[vecino] = (actual, arista["camino_detallado"])
-                    heapq.heappush(heap, (nuevo_g + self._heuristica(vecino, meta), nuevo_g, vecino))
+                    f_nuevo = nuevo_g + self.heuristica(vecino, meta)
+                    heapq.heappush(heap, (f_nuevo, nuevo_g, vecino))
 
-        return self._reconstruir_ruta_completa(origen_macro, meta), nodos_expandidos
+        camino = self._reconstruir_ruta_completa(origen_macro, meta)
+        return camino, nodos_expandidos
 
-      # =================================================================
-      # RECONSTRUCCIÓN DE RUTA COMPLETA
-      # =================================================================
-      
-        def _reconstruir_ruta_completa(self, origen_macro, meta):
-        """
-        Reconstruye la ruta paso a paso a partir de los macro-nodos[cite: 34].
-        """
-        camino_final = []
-        actual = meta
-        while actual is not None and actual != self.laberinto.inicio:
-            datos = origen_macro.get(actual)
-            if datos is None: break
-            padre, celdas_corredor = datos
-            # Se añaden las celdas intermedias del corredor [cite: 34]
-            camino_final.extend(reversed(celdas_corredor[1:]))
-            actual = padre
-        camino_final.append(self.laberinto.inicio)
-        camino_final.reverse()
-        return camino_final
 
 # ------------------------------------------------------------------ #
-#  Función principal con parámetros explícitos                        #
+#  Funcion principal con parametros explicitos                        #
 # ------------------------------------------------------------------ #
 
-def main(n: int, coordenada_salida: Optional[tuple], coordenada_meta: Optional[tuple], heuristica=None):
+def main(n: int, coordenada_salida: Optional[tuple], coordenada_meta: Optional[tuple], heuristica=None) -> None:
     """
-    Función principal del proyecto.
+    Funcion principal del proyecto.
 
     Recibe los insumos del problema, construye el laberinto y el grafo,
-    y ejecuta los tres algoritmos de búsqueda.
+    y ejecuta los tres algoritmos de busqueda.
 
     Args:
-        n                 : Dimensión del laberinto (tamaño N x N, debe ser impar).
+        n                 : Dimension del laberinto (tamano N x N, debe ser impar).
         coordenada_salida : Tupla (fila, columna) del punto de inicio.
                             Si se pasa None, usa la esquina superior izquierda (1, 1).
         coordenada_meta   : Tupla (fila, columna) del punto de llegada.
                             Si se pasa None, usa el centro de la matriz.
-        heuristica        : Función heurística opcional para A*.
+        heuristica        : Funcion heuristica opcional para A*.
                             Si se pasa None, usa distancia Manhattan por defecto.
 
     Ejemplo de uso:
@@ -593,7 +643,7 @@ def main(n: int, coordenada_salida: Optional[tuple], coordenada_meta: Optional[t
     # 1. Construir el laberinto con las dimensiones indicadas
     laberinto = Laberinto(tamano=n)
 
-    # 2. Sobreescribir inicio y meta si se pasaron coordenadas explícitas
+    # 2. Sobreescribir inicio y meta si se pasaron coordenadas explicitas
     if coordenada_salida is not None:
         laberinto.inicio = coordenada_salida
         laberinto.matriz[coordenada_salida[0]][coordenada_salida[1]] = laberinto.INICIO
@@ -605,26 +655,26 @@ def main(n: int, coordenada_salida: Optional[tuple], coordenada_meta: Optional[t
     # 3. Transformar la matriz en grafo
     grafo = Grafo(laberinto)
 
-    # 4. Crear el buscador con la heurística indicada (o Manhattan por defecto)
+    # 4. Crear el buscador con la heuristica indicada (o Manhattan por defecto)
     buscador = Buscador(laberinto, grafo, heuristica=heuristica)
 
     print(f"Laberinto {n}x{n} | Salida: {laberinto.inicio} | Meta: {laberinto.meta}")
     print("-" * 50)
 
     # 5. Ejecutar los tres algoritmos e imprimir rutas
-    print("Corriendo BFS — Búsqueda por Amplitud...")
+    print("Corriendo BFS — Busqueda por Amplitud...")
     camino_bfs = buscador.bfs()
     print(f"BFS — ruta calculada: {camino_bfs}")
     print(f"BFS — pasos: {len(camino_bfs)}")
     print("-" * 50)
 
-    print("Corriendo DFS — Búsqueda por Profundidad...")
+    print("Corriendo DFS — Busqueda por Profundidad...")
     camino_dfs = buscador.dfs()
     print(f"DFS — ruta calculada: {camino_dfs}")
     print(f"DFS — pasos: {len(camino_dfs)}")
     print("-" * 50)
 
-    print("Corriendo A* — Búsqueda Informada...")
+    print("Corriendo A* — Busqueda Informada...")
     camino_astar = buscador.a_star()
     print(f"A*  — ruta calculada: {camino_astar}")
     print(f"A*  — pasos: {len(camino_astar)}")
@@ -636,7 +686,7 @@ def main(n: int, coordenada_salida: Optional[tuple], coordenada_meta: Optional[t
 
 if __name__ == "__main__":
     main(
-        n=21,
+        n=55,
         coordenada_salida=None,   # None = usa esquina superior izquierda (1,1)
         coordenada_meta=None,     # None = usa el centro de la matriz
     )
